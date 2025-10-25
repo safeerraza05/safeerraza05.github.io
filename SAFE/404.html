@@ -4,10 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SAFE</title>
-    <script type="module" crossorigin src="/SAFE/assets/index-D_nawvL7.js"></script>
+
+    <!-- Runtime API override: ALWAYS points the app to your Railway backend.
+         ✱ Replace <YOUR-railway-service> with your actual Railway host. -->
+    <script>
+      window.__SAFE_API_BASE__ = "https://<YOUR-railway-service>.up.railway.app";
+    </script>
+    <script type="module" crossorigin src="/SAFE/assets/index-rSFrlFXA.js"></script>
     <link rel="stylesheet" crossorigin href="/SAFE/assets/index-DcYvktBI.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"></div>
+    <!-- Keep this last so the override above is available when the app boots -->
   </body>
 </html>
