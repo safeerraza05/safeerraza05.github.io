@@ -6,46 +6,48 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 
 // Resolve asset URLs relative to the SW scope (handles GH Pages subpath)
 function scopedUrl(path) {
-  try {
-    return new URL(path, self.registration.scope).href;
-  } catch {
-    return path; // fallback
-  }
+  try { return new URL(path, self.registration.scope).href; } catch { return path; }
 }
 
-// --- Web Push: show notification when a push arrives ---
-self.addEventListener('push', (event) => {
+// Broadcast a message to all open tabs under this SW scope
+async function broadcastToClients(message) {
   try {
-    const data = event.data ? event.data.json() : {};
-    const title = data.title || 'SAFE Alert';
-    const body  = data.body  || 'New alert near you.';
-    const url   = data.url   || '/';
-    const icon  = scopedUrl('icons/icon-192.png'); // no leading slash
-    event.waitUntil(
-      self.registration.showNotification(title, {
-        body,
-        icon,
-        badge: icon,
-        data: { url }
-      })
-    );
-  } catch {
-    event.waitUntil(
-      self.registration.showNotification('SAFE Alert', {
-        body: 'Open the app for details.'
-      })
-    );
-  }
+    const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const tab of tabs) { try { tab.postMessage(message); } catch {} }
+  } catch {}
+}
+
+// --- Web Push: show notification AND ping pages (for AlertBell) ---
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch {}
+
+  const title   = data.title || 'SAFE Alert';
+  const body    = data.body  || 'New alert near you.';
+  const url     = (data.url || '/').toString();   // deep link to open
+  const payload = data.data || null;              // full FR-6 payload from backend
+  const icon    = scopedUrl('icons/icon-192.png'); // GH Pages-safe
+
+  const showNotif = self.registration.showNotification(title, {
+    body,
+    icon,
+    badge: icon,
+    data: { url, payload },  // keep payload on the notif too
+  });
+
+  // Also notify open tabs so the bell can blink and the inbox can update
+  const pingTabs = broadcastToClients({ type: 'SAFE_PUSH', url, payload, title, body });
+
+  event.waitUntil(Promise.all([showNotif, pingTabs]));
 });
 
 // --- Click → focus or open the target URL ---
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || '/';
+  const url = (event.notification?.data && event.notification.data.url) || '/';
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((tabs) => {
       for (const tab of tabs) {
-        // Prefer focusing an existing tab; navigate it to url if needed
         if ('focus' in tab) {
           try { if ('navigate' in tab) tab.navigate(url); } catch {}
           return tab.focus();
