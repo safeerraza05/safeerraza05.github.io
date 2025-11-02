@@ -1,26 +1,31 @@
 // public/sw.js
 
-// (Optional) fast activate on update
+// Fast activate on update
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
-// Resolve asset URLs relative to the SW scope (handles GH Pages subpath)
+// Resolve URLs relative to the SW scope (works on GitHub Pages subpaths like /SAFE/)
 function scopedUrl(path) {
   try { return new URL(path, self.registration.scope).href; } catch { return path; }
 }
 
-// Broadcast a message to all open tabs under this SW scope
+// Broadcast a message to all controlled windows
 async function broadcastToClients(message) {
   try {
     const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const tab of tabs) { try { tab.postMessage(message); } catch {} }
+    for (const tab of tabs) {
+      try { tab.postMessage(message); } catch {}
+    }
   } catch {}
 }
 
-// --- Web Push: show notification AND ping pages (for AlertBell) ---
+// --- Handle incoming Web Push ---
+// Shows a notification AND pings open tabs so your AlertBell can update (expects type: 'SAFE_PUSH').
 self.addEventListener('push', (event) => {
   let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch {}
+  try { data = event.data ? event.data.json() : {}; } catch {
+    try { data = JSON.parse(event.data.text()); } catch { data = {}; }
+  }
 
   const title   = data.title || 'SAFE Alert';
   const body    = data.body  || 'New alert near you.';
@@ -46,14 +51,29 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const url = (event.notification?.data && event.notification.data.url) || '/';
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((tabs) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (tabs) => {
+      // Prefer a tab already controlled by this SW; otherwise open one
       for (const tab of tabs) {
-        if ('focus' in tab) {
-          try { if ('navigate' in tab) tab.navigate(url); } catch {}
-          return tab.focus();
-        }
+        try {
+          if (tab.url && tab.url.startsWith(self.registration.scope)) {
+            try { if ('navigate' in tab) await tab.navigate(url); } catch {}
+            return tab.focus();
+          }
+        } catch {}
       }
-      if (clients.openWindow) return clients.openWindow(url);
+      if (tabs[0]) {
+        try { if ('navigate' in tabs[0]) await tabs[0].navigate(url); } catch {}
+        return tabs[0].focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
     })
   );
+});
+
+// --- Token rotation hook ---
+// Browsers can rotate push tokens. We can't re-subscribe here (no email/VAPID available),
+// so tell pages to refresh/rebind the token if needed.
+self.addEventListener('pushsubscriptionchange', () => {
+  // Page can listen for this and call rebind/enable again (non-blocking)
+  broadcastToClients({ type: 'PUSH_TOKEN_EXPIRED' });
 });
