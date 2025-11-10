@@ -1,4 +1,4 @@
-// public/sw.js
+// public/sw.js — full replacement (robust deep-link handling)
 
 // Fast activate on update
 self.addEventListener('install', () => self.skipWaiting());
@@ -29,15 +29,15 @@ self.addEventListener('push', (event) => {
 
   const title   = data.title || 'SAFE Alert';
   const body    = data.body  || 'New alert near you.';
-  const url     = (data.url || '/').toString();   // deep link to open
-  const payload = data.data || null;              // full FR-6 payload from backend
-  const icon    = scopedUrl('icons/icon-192.png'); // GH Pages-safe
+  const url     = (data.url || data.deep_link || '/').toString();   // prefer explicit deep_link
+  const payload = data.data || null;                                 // full FR-6 payload from backend
+  const icon    = scopedUrl('icons/icon-192.png');                   // GH Pages-safe
 
   const showNotif = self.registration.showNotification(title, {
     body,
     icon,
     badge: icon,
-    data: { url, payload },  // keep payload on the notif too
+    data: { url, deep_link: data.deep_link, payload },  // keep everything for click handler
   });
 
   // Also notify open tabs so the bell can blink and the inbox can update
@@ -49,31 +49,35 @@ self.addEventListener('push', (event) => {
 // --- Click → focus or open the target URL ---
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification?.data && event.notification.data.url) || '/';
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (tabs) => {
-      // Prefer a tab already controlled by this SW; otherwise open one
-      for (const tab of tabs) {
-        try {
-          if (tab.url && tab.url.startsWith(self.registration.scope)) {
-            try { if ('navigate' in tab) await tab.navigate(url); } catch {}
-            return tab.focus();
-          }
-        } catch {}
-      }
-      if (tabs[0]) {
-        try { if ('navigate' in tabs[0]) await tabs[0].navigate(url); } catch {}
-        return tabs[0].focus();
-      }
-      if (self.clients.openWindow) return self.clients.openWindow(url);
-    })
-  );
+
+  // Extract absolute URL from payload variants
+  const data = (event.notification && event.notification.data) || {};
+  let target = data.url || data.deep_link || (data.payload && (data.payload.deep_link || data.payload.url));
+
+  // Fallback to scope root if nothing present
+  if (!target) target = self.registration.scope;
+
+  event.waitUntil((async () => {
+    // Resolve relative URLs (e.g., "open/123") against the SW scope (/SAFE/)
+    try { target = new URL(target, self.registration.scope).href; } catch {}
+
+    const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const tab of tabs) {
+      try {
+        if (tab.url && tab.url.startsWith(self.registration.scope)) {
+          try { if ('navigate' in tab) await tab.navigate(target); } catch {}
+          return tab.focus();
+        }
+      } catch {}
+    }
+
+    if (self.clients.openWindow) return self.clients.openWindow(target);
+  })());
 });
 
 // --- Token rotation hook ---
 // Browsers can rotate push tokens. We can't re-subscribe here (no email/VAPID available),
 // so tell pages to refresh/rebind the token if needed.
 self.addEventListener('pushsubscriptionchange', () => {
-  // Page can listen for this and call rebind/enable again (non-blocking)
   broadcastToClients({ type: 'PUSH_TOKEN_EXPIRED' });
 });
