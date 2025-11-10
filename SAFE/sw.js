@@ -1,4 +1,6 @@
-// public/sw.js — full replacement (deep-link + caseId fallback)
+// public/sw.js — Phase B (force openWindow for /open/, version bump)
+// SW_VERSION is used to force browsers to fetch the latest worker on deploy
+const SW_VERSION = 'v2025-11-10-1';
 
 // Fast activate on update
 self.addEventListener('install', () => self.skipWaiting());
@@ -37,9 +39,10 @@ self.addEventListener('push', (event) => {
     icon,
     badge: icon,
     data: { url, deep_link: data.deep_link, payload },  // keep everything for click handler
+    // tag/title renotify could be added later if you want replacements
   });
 
-  const pingTabs = broadcastToClients({ type: 'SAFE_PUSH', url, payload, title, body });
+  const pingTabs = broadcastToClients({ type: 'SAFE_PUSH', url, payload, title, body, sw: SW_VERSION });
   event.waitUntil(Promise.all([showNotif, pingTabs]));
 });
 
@@ -69,6 +72,12 @@ self.addEventListener('notificationclick', (event) => {
       target = u.href;
     } catch {}
 
+    // If this is an Open Case deep-link, always open a NEW tab/window for determinism
+    if (/\/open\/(\d+)/.test(target) && self.clients.openWindow) {
+      return self.clients.openWindow(target);
+    }
+
+    // Otherwise prefer focus + navigate of an existing SAFE tab
     const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const tab of tabs) {
       try {
@@ -79,11 +88,12 @@ self.addEventListener('notificationclick', (event) => {
       } catch {}
     }
 
+    // No suitable tab: open a new one
     if (self.clients.openWindow) return self.clients.openWindow(target);
   })());
 });
 
 // --- Token rotation hook ---
 self.addEventListener('pushsubscriptionchange', () => {
-  broadcastToClients({ type: 'PUSH_TOKEN_EXPIRED' });
+  broadcastToClients({ type: 'PUSH_TOKEN_EXPIRED', sw: SW_VERSION });
 });
