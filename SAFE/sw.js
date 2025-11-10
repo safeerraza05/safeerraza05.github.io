@@ -1,4 +1,4 @@
-// public/sw.js — full replacement (robust deep-link handling)
+// public/sw.js — full replacement (deep-link + caseId fallback)
 
 // Fast activate on update
 self.addEventListener('install', () => self.skipWaiting());
@@ -20,7 +20,6 @@ async function broadcastToClients(message) {
 }
 
 // --- Handle incoming Web Push ---
-// Shows a notification AND pings open tabs so your AlertBell can update (expects type: 'SAFE_PUSH').
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch {
@@ -40,9 +39,7 @@ self.addEventListener('push', (event) => {
     data: { url, deep_link: data.deep_link, payload },  // keep everything for click handler
   });
 
-  // Also notify open tabs so the bell can blink and the inbox can update
   const pingTabs = broadcastToClients({ type: 'SAFE_PUSH', url, payload, title, body });
-
   event.waitUntil(Promise.all([showNotif, pingTabs]));
 });
 
@@ -50,16 +47,27 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
-  // Extract absolute URL from payload variants
   const data = (event.notification && event.notification.data) || {};
   let target = data.url || data.deep_link || (data.payload && (data.payload.deep_link || data.payload.url));
 
-  // Fallback to scope root if nothing present
+  // Robust fallback: build target from case id if available
+  const caseId = (data && (data.case_id || data.caseId)) || (data.payload && (data.payload.case_id || data.payload.caseId));
+  if (!target && caseId != null) {
+    target = `open/${caseId}`; // resolved below under SW scope (/SAFE/)
+  }
+
+  // Fallback to scope root if still nothing
   if (!target) target = self.registration.scope;
 
   event.waitUntil((async () => {
-    // Resolve relative URLs (e.g., "open/123") against the SW scope (/SAFE/)
-    try { target = new URL(target, self.registration.scope).href; } catch {}
+    // Normalize any /cases/{id} → /open/{id} and resolve rel/abs under scope
+    try {
+      let u = new URL(target, self.registration.scope);
+      if (/\/cases\//.test(u.pathname)) {
+        u.pathname = u.pathname.replace(/\/cases\//, '/open/');
+      }
+      target = u.href;
+    } catch {}
 
     const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const tab of tabs) {
@@ -76,8 +84,6 @@ self.addEventListener('notificationclick', (event) => {
 });
 
 // --- Token rotation hook ---
-// Browsers can rotate push tokens. We can't re-subscribe here (no email/VAPID available),
-// so tell pages to refresh/rebind the token if needed.
 self.addEventListener('pushsubscriptionchange', () => {
   broadcastToClients({ type: 'PUSH_TOKEN_EXPIRED' });
 });
