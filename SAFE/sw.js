@@ -1,6 +1,6 @@
-// public/sw.js — Phase B (force openWindow for /open/, version bump)
-// SW_VERSION is used to force browsers to fetch the latest worker on deploy
-const SW_VERSION = 'v2025-11-10-1';
+// public/sw.js — Phase B+ (final deep-link hardening + SPA fallback hint)
+// Force browsers to fetch this exact worker on deploy by bumping SW_VERSION
+const SW_VERSION = 'v2025-11-10-2';
 
 // Fast activate on update
 self.addEventListener('install', () => self.skipWaiting());
@@ -39,11 +39,12 @@ self.addEventListener('push', (event) => {
     icon,
     badge: icon,
     data: { url, deep_link: data.deep_link, payload },  // keep everything for click handler
-    // tag/title renotify could be added later if you want replacements
   });
 
-  const pingTabs = broadcastToClients({ type: 'SAFE_PUSH', url, payload, title, body, sw: SW_VERSION });
-  event.waitUntil(Promise.all([showNotif, pingTabs]));
+  event.waitUntil(Promise.all([
+    showNotif,
+    broadcastToClients({ type: 'SAFE_PUSH', url, payload, title, body, sw: SW_VERSION })
+  ]));
 });
 
 // --- Click → focus or open the target URL ---
@@ -53,16 +54,28 @@ self.addEventListener('notificationclick', (event) => {
   const data = (event.notification && event.notification.data) || {};
   let target = data.url || data.deep_link || (data.payload && (data.payload.deep_link || data.payload.url));
 
-  // Robust fallback: build target from case id if available
+  // Fallbacks: build from case id, or as a last resort hint the SPA to redirect
   const caseId = (data && (data.case_id || data.caseId)) || (data.payload && (data.payload.case_id || data.payload.caseId));
   if (!target && caseId != null) {
+    // First try the direct public page
     target = `open/${caseId}`; // resolved below under SW scope (/SAFE/)
   }
 
-  // Fallback to scope root if still nothing
-  if (!target) target = self.registration.scope;
-
   event.waitUntil((async () => {
+    // If still nothing, synthesize a SPA hint like /SAFE/?open_case=123
+    if (!target && caseId != null) {
+      try {
+        const u = new URL(self.registration.scope);
+        u.searchParams.set('open_case', String(caseId));
+        target = u.href;
+      } catch {
+        target = self.registration.scope + '?open_case=' + String(caseId);
+      }
+    }
+
+    // Fallback to scope root if still nothing at all
+    if (!target) target = self.registration.scope;
+
     // Normalize any /cases/{id} → /open/{id} and resolve rel/abs under scope
     try {
       let u = new URL(target, self.registration.scope);
