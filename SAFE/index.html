@@ -5,25 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SAFE</title>
 
-    <!-- Pre-boot deep-link guard: normalize ?open_case=<id> → /SAFE/open/<id> (runs BEFORE React mounts) -->
+    <!-- Pre-boot deep-link guard: ?open_case=<id> → /SAFE/open/<id> -->
     <script>
       (function () {
         try {
           var scope = location.pathname.indexOf('/SAFE') === 0 ? '/SAFE' : '';
           var url = new URL(location.href);
-          var path = url.pathname;
-          var qs = url.searchParams;
+          var qs  = url.searchParams;
           var cid = qs.get('open_case') || qs.get('case') || qs.get('case_id') || qs.get('cid');
           if (cid && /^\d+$/.test(cid)) {
             var target = scope + '/open/' + cid;
-            if (path !== target) { history.replaceState(null, '', target); }
-            return; // mount directly on /open/<id>
+            if (url.pathname !== target) history.replaceState(null, '', target);
           }
         } catch (_) {}
       })();
     </script>
 
-    <!-- Keep your runtime API override -->
+    <!-- Runtime API override (keep your Railway host) -->
     <script>
       window.__SAFE_API_BASE__ = 'https://safe-production-658f.up.railway.app';
     </script>
@@ -33,18 +31,26 @@
   <body>
     <div id="root"></div>
 
-    <!-- Runtime guard: if a stale tab loads with ?open_case=<id>, force redirect after mount -->
+    <!-- Deterministic hand-off: SW click -> tell SPA to navigate -->
     <script>
-      (function(){
-        try {
-          var scope = location.pathname.indexOf('/SAFE') === 0 ? '/SAFE' : '';
-          var url = new URL(location.href);
-          var qs = url.searchParams;
-          var cid = qs.get('open_case') || qs.get('case') || qs.get('case_id') || qs.get('cid');
-          if (cid && /^\d+$/.test(cid)) {
-            location.replace(scope + '/open/' + cid);
-          }
-        } catch (_) {}
+      (function () {
+        function toOpen(url, caseId) {
+          try {
+            var scope = location.pathname.indexOf('/SAFE') === 0 ? '/SAFE' : '';
+            if (!url && caseId) url = scope + '/open/' + String(caseId);
+            if (!url && caseId) url = scope + '/?open_case=' + encodeURIComponent(String(caseId));
+            if (!url) return;
+            location.replace(url);
+          } catch (_) {}
+        }
+        if ('serviceWorker' in navigator && navigator.serviceWorker) {
+          try {
+            navigator.serviceWorker.addEventListener('message', function (e) {
+              var m = e && e.data || {};
+              if (m && m.type === 'SAFE_NOTIF_CLICK') toOpen(m.url, m.case_id);
+            });
+          } catch (_) {}
+        }
       })();
     </script>
 
