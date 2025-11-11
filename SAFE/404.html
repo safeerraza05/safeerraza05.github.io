@@ -5,8 +5,40 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SAFE</title>
 
-    <!-- Runtime API override: ALWAYS points the app to your Railway backend.
-         ✱ Replace <YOUR-railway-service> with your actual Railway host. -->
+    <!-- Pre-boot deep-link guard: normalize ?open_case=<id> to /SAFE/open/<id>
+         Runs BEFORE React mounts to prevent auth guards from hijacking the route. -->
+    <script>
+      (function () {
+        try {
+          var scope = location.pathname.indexOf('/SAFE') === 0 ? '/SAFE' : '';
+          var url = new URL(location.href);
+          var path = url.pathname;
+          var qs = url.searchParams;
+
+          // 1) If we have ?open_case=<id> (or common aliases), normalize to /<scope>/open/<id>
+          var cid = qs.get('open_case') || qs.get('case') || qs.get('case_id') || qs.get('cid');
+          if (cid && /^\d+$/.test(cid)) {
+            var target = scope + '/open/' + cid;
+            if (path !== target) {
+              history.replaceState(null, '', target); // no extra entry
+            }
+            return; // let React mount on /open/<id>
+          }
+
+          // 2) If we are already on /<scope>/open/<id>, leave as is
+          var openRe = new RegExp('^' + scope.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + '/open/\\\\d+$');
+          if (openRe.test(path)) {
+            return;
+          }
+
+          // 3) Otherwise do nothing; normal app routing continues
+        } catch (e) {
+          // Fail safe: do nothing on parse errors
+        }
+      })();
+    </script>
+
+    <!-- Runtime API override: keep your current setting (points to Railway) -->
     <script>
       window.__SAFE_API_BASE__ = "https://safe-production-658f.up.railway.app";
     </script>
@@ -15,6 +47,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <!-- Keep this last so the override above is available when the app boots -->
+    <!-- Keep this last so the scripts above run BEFORE React mounts -->
   </body>
 </html>
